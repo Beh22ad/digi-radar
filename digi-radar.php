@@ -3,7 +3,7 @@
  * Plugin Name: دیجی رادار
  * Plugin URI:
  * Description: بروز رسانی اتوماتیک قیمت محصولات از دیجیکالا
- * Version: 1.1.2
+ * Version: 1.2.2
  * Author: mrnargil.ir
  * Author URI: https://mrnargil.ir
  * Text Domain: digi-radar

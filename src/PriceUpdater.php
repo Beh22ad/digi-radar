@@ -18,12 +18,8 @@ class PriceUpdater {
     }
 
     public function update_product() {
-
-
         // Verify nonce
        // check_ajax_referer('digi_price',  '_ajax_nonce');
-
-
 
         // Get product IDs
         $product_ids = get_transient('digi_products_ids');
@@ -77,9 +73,44 @@ class PriceUpdater {
     }
 
     private function process_product($product_id) {
-        $product_code = get_post_meta($product_id, '_digi_product_code', true);
+        $product = wc_get_product($product_id);
+
+        if (!$product) {
+            $this->log("Product {$product_id} not found.");
+            return;
+        }
+
+        if ($product->is_type('variable')) {
+            $this->log("Processing variable product {$product_id}");
+            $variations = $product->get_children();
+            $parent_in_stock = false;
+
+            foreach ($variations as $variation_id) {
+                // Process each variation as a single item
+                $this->process_single_item($variation_id);
+                $variation = wc_get_product($variation_id);
+                if ($variation && $variation->is_in_stock()) {
+                    $parent_in_stock = true;
+                }
+            }
+
+            // Update parent product stock status
+            $parent_stock_status = $parent_in_stock ? 'instock' : 'outofstock';
+            $product->set_stock_status($parent_stock_status);
+            $product->save();
+            wc_delete_product_transients($product_id);
+
+        } else {
+            // Process simple product
+            $this->log("Processing simple product {$product_id}");
+            $this->process_single_item($product_id);
+        }
+    }
+
+    private function process_single_item($item_id) {
+        $product_code = get_post_meta($item_id, '_digi_product_code', true);
         if (empty($product_code)) {
-            $this->log("Product {$product_id} skipped: No product code found");
+            $this->log("Product {$item_id} skipped: No product code found");
             return;
         }
 
@@ -97,7 +128,7 @@ class PriceUpdater {
             $response = wp_remote_get($api_url);
             $this->log(print_r('url= '.$api_url, true));
             if (is_wp_error($response)) {
-                $this->log("API request failed for product {$product_id}: " . $response->get_error_message());
+                $this->log("API request failed for product {$item_id}: " . $response->get_error_message());
                 return;
             }
 
@@ -107,7 +138,7 @@ class PriceUpdater {
 
         $data = json_decode($data, true);
         if ($data['status'] !== 'ok') {
-            $this->log("API response status is not OK for product {$product_id}");
+            $this->log("API response status is not OK for product {$item_id}");
             return;
         }
 
@@ -119,11 +150,13 @@ class PriceUpdater {
         $next_update_date = $jalaliDate." ($iranTime)"; // Persian date format
 
         $in_stock = false;
+        $found_price = false;
 
         // Find the matching product in the API response
         foreach ($data['data'] as $item) {
             if ($item['id'] === $product_code) {
                 $in_stock = true;
+                $found_price = true;
                 // Access the price and last price date using Persian keys
                 $api_price = $item["price"]; 
                 $api_sale_price = $item['sale_price']; 
@@ -136,7 +169,7 @@ class PriceUpdater {
                 $last_price_date =  $item['date']; // تاریخ اخرین قیمت
 
                 // Calculate the adjusted price
-                $price_adjustment = get_post_meta($product_id, '_digi_radar_adjustment', true);
+                $price_adjustment = get_post_meta($item_id, '_digi_radar_adjustment', true);
                 if (!empty($price_adjustment)) {
                     $adjusted_price =  eval('return ' . str_replace('{price}', $api_price, $price_adjustment) . ';');
                     $adjusted_sale_price =  eval('return ' . str_replace('{price}', $api_sale_price, $price_adjustment) . ';');  
@@ -145,88 +178,46 @@ class PriceUpdater {
                     $adjusted_sale_price = $api_sale_price;
                 }
 
-                $product = wc_get_product($product_id);
+                $product = wc_get_product($item_id);
+                $product->set_stock_status('instock');
 
-                if ($product->is_type('variable')) {
-                        // Get all variations
-                        $variations = $product->get_children();
-
-                        $product->set_stock_status('instock');
-                        
-                        foreach ($variations as $variation_id) {
-                            $variation = wc_get_product($variation_id);
-                            $variation->set_stock_status('instock');
-                            
-                            if ($adjusted_price == $adjusted_sale_price) {
-                                // Update regular price and remove sale price
-                                $variation->set_regular_price($adjusted_price);
-                                $variation->set_sale_price('');
-                            } else {
-                                // Keep regular price and update sale price
-                                $variation->set_regular_price($adjusted_price);
-                                $variation->set_sale_price($adjusted_sale_price);
-                            }
-                            
-                            $variation->save();
-                        }
-                        
-                        // Update parent variable product price
-                        $product->save();
-                        } else {
-                            // Simple product
-                            $product->set_stock_status('instock');
-                            if ($adjusted_price == $adjusted_sale_price) {
-                                // Update regular price and remove sale price
-                                $product->set_regular_price($adjusted_price);
-                                $product->set_sale_price('');
-                            } else {
-                                // Keep regular price and update sale price
-                                $product->set_regular_price($adjusted_price);
-                                $product->set_sale_price($adjusted_sale_price);
-                            }
-                            
-                            $product->save();
-                        }
-                wc_delete_product_transients($product_id);
+                if ($adjusted_price == $adjusted_sale_price) {
+                    // Update regular price and remove sale price
+                    $product->set_regular_price($adjusted_price);
+                    $product->set_sale_price('');
+                } else {
+                    // Keep regular price and update sale price
+                    $product->set_regular_price($adjusted_price);
+                    $product->set_sale_price($adjusted_sale_price);
+                }
+                
+                $product->save();
+                wc_delete_product_transients($item_id);
 
                 // Update last price date
-                update_post_meta($product_id, '_digi_radar_last_price_date', $last_price_date);
-                update_post_meta($product_id, '_digi_radar_next_update', $next_update_date);
+                update_post_meta($item_id, '_digi_radar_last_price_date', $last_price_date);
+                update_post_meta($item_id, '_digi_radar_next_update', $next_update_date);
 
-                $this->log("Product {$product_id} updated: Price = {$adjusted_price}, Last Price Date = {$last_price_date}, Next Update Date = {$next_update_date}");
+                $this->log("Product {$item_id} updated: Price = {$adjusted_price}, Last Price Date = {$last_price_date}, Next Update Date = {$next_update_date}");
                 break;
             }
         }
+        
+        // If price was not found and unavailable update is enabled
         $update_unavailable = get_option('digi_radar_unavailable_update', 'false');
-        if ( $in_stock == false && $update_unavailable === 'true' ) {
-            $product = wc_get_product($product_id);
-            if ($product->is_type('variable')) {
-                $variations = $product->get_children();              
-                foreach ($variations as $variation_id) {
-                    $variation = wc_get_product($variation_id);
-                    $variation->set_stock_status('outofstock');
-                    if ($variation->managing_stock()) {
-                       // $variation->set_stock_quantity(0);
-                    }
-                    
-                    $variation->save();
-                }
-                $product->set_stock_status('outofstock');
-                $product->save();
-            } else {
-                $product->set_stock_status('outofstock');
-                if ($product->managing_stock()) {
-                   // $product->set_stock_quantity(0);
-                }               
-                $product->save();
-            }
-            wc_delete_product_transients($product_id);            
-            update_post_meta($product_id, '_digi_radar_next_update', $next_update_date);
-            $this->log("Product {$product_id} updated: is out of stock");
-
-
+        if ( !$found_price && $update_unavailable === 'true' ) {
+            $product = wc_get_product($item_id);
+            $product->set_stock_status('outofstock');
+            if ($product->managing_stock()) {
+               // $product->set_stock_quantity(0);
+            }               
+            $product->save();
+            wc_delete_product_transients($item_id);            
+            update_post_meta($item_id, '_digi_radar_next_update', $next_update_date);
+            $this->log("Product {$item_id} updated: is out of stock");
         }
     }
+
 
     private function delete_all_transients() {
     global $wpdb;
