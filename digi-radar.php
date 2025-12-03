@@ -4,7 +4,7 @@
  * Plugin Name: دیجی رادار
  * Plugin URI:
  * Description: بروز رسانی اتوماتیک قیمت محصولات از دیجیکالا
- * Version: 1.3.1
+ * Version: 1.3.2
  * Author: mrnargil.ir
  * Author URI: https://mrnargil.ir
  * Text Domain: digi-radar
@@ -20,6 +20,26 @@ require_once __DIR__ . '/vendor/autoload.php';
 if (!defined("DIGI_RADAR_MAIN_FILE")) {
     define("DIGI_RADAR_MAIN_FILE", __FILE__);
 }
+
+// delete update catch after upgrade
+add_action('upgrader_process_complete', function ($upgrader, $options) {
+    // Only run for plugin updates
+    if ($options['type'] === 'plugin' && !empty($options['plugins'])) {
+        foreach ($options['plugins'] as $plugin) {
+            // Check if our plugin was updated
+            if ($plugin === plugin_basename(DIGI_RADAR_MAIN_FILE)) {
+                // Get namespace from header
+                $plugin_data = get_file_data(DIGI_RADAR_MAIN_FILE, [
+                    'TextDomain' => 'Text Domain',
+                ]);
+                $namespace = $plugin_data['TextDomain'];
+
+                // Delete transient
+                delete_transient($namespace . '_update_response');
+            }
+        }
+    }
+}, 10, 2);
 
 // Load SVG icon
 function digi_radar_get_icon()
