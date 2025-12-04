@@ -22,16 +22,10 @@ if (!defined("DIGI_RADAR_MAIN_FILE")) {
 }
 
 // delete update catch after upgrade
-add_action('upgrader_process_complete', function ($upgrader, $options) {
-    // Get namespace from header
-    $plugin_data = get_file_data(DIGI_RADAR_MAIN_FILE, [
-        'TextDomain' => 'Text Domain',
-    ]);
-    $namespace = $plugin_data['TextDomain'];
+DigiRadar\Admin\UpdateChecker::registerCacheCleaner(DIGI_RADAR_MAIN_FILE);
 
-    // Delete transient
-    delete_transient($namespace . '_update_response');
-}, 10, 2);
+
+
 
 // Load SVG icon
 function digi_radar_get_icon()
